@@ -1,8 +1,7 @@
-// /api/news — returns cached news for users
-// Updated by /api/cron/refresh-news daily at 7am Dubai
-// Falls back to bundled headlines if cache empty
-
-import { newsCache } from '../_cache.js'
+// /api/news — fetches latest UAE banking news from Anthropic
+// Uses Vercel CDN caching: results cached for 24 hours
+// Force-refreshable via ?force=1 with admin key
+// Falls back to bundled headlines if API fails
 
 const FALLBACK_NEWS = [
   { title: 'Wio Bank to launch Islamic banking platform after 57% profit jump', source: 'The National', date: 'Mar 17, 2026', dateSort: '2026-03-17', summary: 'Customer deposits climbed 66% to AED 57B, on track for AED 100B assets.', category: 'Digital' },
@@ -20,10 +19,71 @@ const FALLBACK_NEWS = [
   { title: 'Sharjah Islamic Bank achieves AED 1.32B net profit with 26% growth', source: 'Al Bawaba', date: 'Jan 23, 2026', dateSort: '2026-01-23', summary: 'Proposes 20% higher cash dividends and capital increase for shareholders.', category: 'Islamic Finance' },
 ]
 
-export async function GET() {
-  const cached = newsCache.get()
-  const data = cached.items.length > 0 ? cached : { items: FALLBACK_NEWS, fetchedAt: null, source: 'fallback' }
-  return Response.json(data, {
-    headers: { 'Cache-Control': 'public, s-maxage=3600, stale-while-revalidate=86400' }
-  })
+export const runtime = 'nodejs'
+// Revalidate every 24 hours
+export const revalidate = 86400
+
+async function fetchNewsFromClaude() {
+  if (!process.env.ANTHROPIC_API_KEY) return null
+  try {
+    const today = new Date().toISOString().split('T')[0]
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5',
+        max_tokens: 1500,
+        tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 1 }],
+        messages: [{
+          role: 'user',
+          content: `Search once for "UAE banks ${today.slice(0,7)} earnings news" then return ONLY a JSON array of 8 latest UAE banking headlines.\n\nEach item: {"title": "...", "source": "...", "date": "Apr 24, 2026", "dateSort": "2026-04-24", "summary": "one sentence", "category": "Banking|Markets|Regulation|Digital|Islamic Finance|Economy"}\n\nSort newest first. Output ONLY the JSON array, no markdown, no preamble. Start with [ and end with ].`
+        }]
+      })
+    })
+    if (!res.ok) return null
+    const data = await res.json()
+    const text = data.content?.filter(c => c.type === 'text').map(c => c.text).join('').replace(/```json|```/g, '').trim()
+    if (!text) return null
+    const items = JSON.parse(text)
+    if (!Array.isArray(items) || items.length === 0) return null
+    items.sort((a, b) => new Date(b.dateSort || b.date) - new Date(a.dateSort || a.date))
+    return items
+  } catch (err) {
+    console.error('News fetch error:', err.message)
+    return null
+  }
+}
+
+export async function GET(request) {
+  const url = new URL(request.url)
+  const forceRefresh = url.searchParams.get('force') === '1'
+  const adminKey = url.searchParams.get('admin')
+  const isAdmin = adminKey && adminKey === process.env.ADMIN_KEY
+  const allowForce = forceRefresh && isAdmin
+
+  const items = await fetchNewsFromClaude()
+
+  if (items) {
+    return Response.json({
+      items,
+      fetchedAt: new Date().toISOString(),
+      source: allowForce ? 'admin-refresh' : 'live',
+    }, {
+      headers: {
+        'Cache-Control': allowForce
+          ? 'no-cache, no-store, must-revalidate'
+          : 'public, s-maxage=86400, stale-while-revalidate=3600',
+      }
+    })
+  }
+
+  return Response.json({
+    items: FALLBACK_NEWS,
+    fetchedAt: null,
+    source: 'fallback',
+  }, { headers: { 'Cache-Control': 'public, s-maxage=300' } })
 }
