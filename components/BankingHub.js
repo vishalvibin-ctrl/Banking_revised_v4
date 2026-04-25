@@ -852,25 +852,137 @@ const AuditRow = ({ label, fy, fyHint, fyDerived, q1, q1Hint, q1Derived, q1Pendi
 // ─── AI DATA UPDATER TAB (admin only) ──────────────────────────────────────
 
 function AIUpdaterTab({ adminKey }) {
+  const [mode, setMode] = useState('manual') // 'ai' or 'manual'
   const [bankId, setBankId] = useState('')
   const [bankName, setBankName] = useState('')
   const [period, setPeriod] = useState('q1_2026')
   const [pressRelease, setPressRelease] = useState('')
+  const [jsonInput, setJsonInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
   const [copied, setCopied] = useState(false)
+  const [promptCopied, setPromptCopied] = useState(false)
 
   const featuredBanks = ALL_BANKS.filter(b => b.featured && b.totalAssets > 0)
+  const selectedBank = ALL_BANKS.find(b => b.id === bankId)
 
-  const handleExtract = async () => {
+  const periodLabels = {
+    fy2025: 'Full Year 2025 (FY 2025)',
+    fy2026: 'Full Year 2026 (FY 2026)',
+    q1_2026: 'Q1 2026 (three months ended 31 March 2026)',
+    q2_2026: 'Q2 2026 / H1 2026 (six months ended 30 June 2026)',
+    q3_2026: 'Q3 2026 / 9M 2026 (nine months ended 30 September 2026)',
+  }
+
+  const isQuarterly = period.startsWith('q')
+
+  // Build the prompt for ChatGPT/Claude/Gemini
+  const buildPrompt = () => {
+    const periodLabel = periodLabels[period] || period
+    if (isQuarterly) {
+      return `You are extracting banking financial data from a UAE bank press release.
+
+BANK: ${selectedBank?.name || bankName || '[bank name]'}
+PERIOD: ${periodLabel}
+
+INSTRUCTIONS:
+1. Read the press release text I will paste below.
+2. Extract numerical data with these RULES:
+   - All AED amounts converted to BILLIONS (AED B). Example: "AED 5,400 million" -> 5.4
+   - Percentages: just the number (2.4 not "2.4%")
+   - If a figure is NOT clearly stated, use null
+   - Do NOT estimate or guess - only extract what is explicitly stated
+3. Return ONLY a JSON object with these fields (use null for missing fields):
+
+{
+  "q1Profit": <net profit AFTER tax in AED B>,
+  "q1ProfitPrior": <same quarter previous year profit in AED B for YoY>,
+  "q1Assets": <total assets at period end in AED B>,
+  "q1Deposits": <customer deposits in AED B>,
+  "q1Loans": <gross loans in AED B>,
+  "q1Npl": <NPL ratio as percentage number>,
+  "q1Coverage": <provision coverage ratio as percentage number>,
+  "q1Impairment": <impairment charge in AED B>,
+  "q1OpIncome": <total operating income in AED B>,
+  "q1Period": "Q1 2026 reported",
+  "q1Source": "<short citation, e.g. 'Press release Apr 23, 2026'>",
+  "q1Status": "reported",
+  "_notes": "<any caveats or fields you couldn't extract>"
+}
+
+CRITICAL: Output ONLY the JSON object. No markdown code fences, no preamble. Start with { end with }.
+
+PRESS RELEASE TEXT:
+[PASTE THE PRESS RELEASE HERE]`
+    } else {
+      return `You are extracting banking financial data from a UAE bank annual report or press release.
+
+BANK: ${selectedBank?.name || bankName || '[bank name]'}
+PERIOD: ${periodLabel}
+
+INSTRUCTIONS:
+1. Read the press release / annual report text I will paste below.
+2. Extract numerical data with these RULES:
+   - All AED amounts converted to BILLIONS (AED B). Example: "AED 5,400 million" -> 5.4
+   - Percentages: just the number (2.4 not "2.4%")
+   - If a figure is NOT clearly stated, use null
+   - Do NOT estimate or guess - only extract what is explicitly stated
+3. Return ONLY a JSON object with these fields (use null for missing fields):
+
+{
+  "profit2025": <net profit AFTER tax for full year in AED B>,
+  "profit2024": <prior year net profit in AED B>,
+  "totalAssets": <total assets at year-end in AED B>,
+  "customerDeposits": <customer deposits in AED B>,
+  "totalEquity": <total equity in AED B>,
+  "grossLoans": <gross loans in AED B>,
+  "retailLoans": <retail loans in AED B if disclosed>,
+  "corpLoans": <corporate/wholesale loans in AED B if disclosed>,
+  "nplRatio": <NPL ratio as percentage number>,
+  "nplPrior": <prior year NPL ratio as percentage number>,
+  "coverageRatio": <provision coverage ratio as percentage number>,
+  "impairmentCharge": <impairment charge in AED B>,
+  "operatingIncome": <total operating income in AED B>,
+  "yoyGrowth": <YoY profit growth as percentage>,
+  "roe": <return on equity as percentage>,
+  "period": "FY2025 audited",
+  "sourceNote": "<short citation>",
+  "status": "reported",
+  "_notes": "<any caveats>"
+}
+
+CRITICAL: Output ONLY the JSON object. No markdown code fences, no preamble. Start with { end with }.
+
+PRESS RELEASE TEXT:
+[PASTE THE PRESS RELEASE HERE]`
+    }
+  }
+
+  // Build snippet from extracted data (works for both AI and manual JSON)
+  const buildSnippet = (data) => {
+    if (isQuarterly) {
+      const fields = ['q1Profit','q1Assets','q1Deposits','q1Loans','q1Npl','q1Coverage','q1Impairment','q1OpIncome','q1ProfitPrior']
+      const parts = fields.filter(f => data[f] !== null && data[f] !== undefined).map(f => `${f}:${data[f]}`).join(', ')
+      const periodStr = data.q1Period ? `, q1Period:"${data.q1Period}"` : ''
+      const sourceStr = data.q1Source ? `, q1Source:"${String(data.q1Source).replace(/"/g, '\\"')}"` : ''
+      return `${parts}, q1Status:"reported"${periodStr}${sourceStr}`
+    } else {
+      const fields = ['profit2025','profit2024','totalAssets','customerDeposits','totalEquity','grossLoans','retailLoans','corpLoans','nplRatio','nplPrior','coverageRatio','impairmentCharge','operatingIncome','yoyGrowth','roe']
+      const parts = fields.filter(f => data[f] !== null && data[f] !== undefined).map(f => `${f}:${data[f]}`).join(', ')
+      const periodStr = data.period ? `, period:"${data.period}"` : ''
+      const sourceStr = data.sourceNote ? `, sourceNote:"${String(data.sourceNote).replace(/"/g, '\\"')}"` : ''
+      return `${parts}, status:"reported"${periodStr}${sourceStr}`
+    }
+  }
+
+  const handleAIExtract = async () => {
     if (!bankId || !pressRelease.trim()) {
       setError('Please pick a bank and paste the press release text')
       return
     }
     setLoading(true); setError(null); setResult(null); setCopied(false)
     try {
-      const selectedBank = ALL_BANKS.find(b => b.id === bankId)
       const res = await fetch(`/api/extract?admin=${encodeURIComponent(adminKey)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -879,11 +991,35 @@ function AIUpdaterTab({ adminKey }) {
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || `API error ${res.status}`)
       setResult(data)
-    } catch (err) {
-      setError(err.message)
-    } finally {
-      setLoading(false)
+    } catch (err) { setError(err.message) } finally { setLoading(false) }
+  }
+
+  const handleManualJSON = () => {
+    if (!bankId) {
+      setError('Please pick a bank first')
+      return
     }
+    if (!jsonInput.trim()) {
+      setError('Please paste the JSON output from ChatGPT/Claude/Gemini')
+      return
+    }
+    setError(null); setResult(null); setCopied(false)
+    try {
+      // Strip markdown fences if user accidentally pasted them
+      const cleaned = jsonInput.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim()
+      const parsed = JSON.parse(cleaned)
+      const snippet = buildSnippet(parsed)
+      setResult({ bankId, period, extracted: parsed, snippet, source: 'manual' })
+    } catch (e) {
+      setError(`Invalid JSON: ${e.message}. Make sure you copied just the {...} object.`)
+    }
+  }
+
+  const copyPrompt = () => {
+    if (!bankId) { setError('Pick a bank first to personalise the prompt'); return }
+    navigator.clipboard.writeText(buildPrompt())
+    setPromptCopied(true)
+    setTimeout(() => setPromptCopied(false), 2500)
   }
 
   const copySnippet = () => {
@@ -895,7 +1031,7 @@ function AIUpdaterTab({ adminKey }) {
   }
 
   const reset = () => {
-    setResult(null); setError(null); setPressRelease(''); setCopied(false)
+    setResult(null); setError(null); setPressRelease(''); setJsonInput(''); setCopied(false)
   }
 
   return (
@@ -905,14 +1041,20 @@ function AIUpdaterTab({ adminKey }) {
           <h3 style={{ fontFamily:"'Fraunces',serif", fontSize:16, fontWeight:700, color:'#A78BFA', marginBottom:2, display:'flex', alignItems:'center', gap:8 }}>
             🤖 AI Data Updater <span style={{ padding:'2px 7px', borderRadius:4, background:'rgba(167,139,250,0.15)', color:'#A78BFA', fontSize:8, fontWeight:700, letterSpacing:'0.08em' }}>ADMIN</span>
           </h3>
-          <p style={{ fontSize:11, color:'#4A5568' }}>Paste a press release · Claude extracts the data · Copy snippet to banks.js</p>
+          <p style={{ fontSize:11, color:'#4A5568' }}>Two ways to update bank data — copy snippet to banks.js</p>
         </div>
       </div>
 
-      {/* Step 1: Select bank */}
+      {/* Mode toggle */}
+      <div style={{ display:'flex', gap:5, marginBottom:14, background:'rgba(255,255,255,0.03)', borderRadius:100, padding:3, border:'1px solid rgba(255,255,255,0.05)' }}>
+        <button onClick={()=>{setMode('manual'); reset()}} style={{ flex:1, padding:'9px 0', border:'none', borderRadius:100, cursor:'pointer', background:mode==='manual'?'#A78BFA':'transparent', color:mode==='manual'?'#0B1120':'#7A8699', fontFamily:"'Outfit',sans-serif", fontWeight:mode==='manual'?700:500, fontSize:11.5 }}>📋 Manual JSON Paste (Free)</button>
+        <button onClick={()=>{setMode('ai'); reset()}} style={{ flex:1, padding:'9px 0', border:'none', borderRadius:100, cursor:'pointer', background:mode==='ai'?'#A78BFA':'transparent', color:mode==='ai'?'#0B1120':'#7A8699', fontFamily:"'Outfit',sans-serif", fontWeight:mode==='ai'?700:500, fontSize:11.5 }}>🤖 AI Extract (uses API)</button>
+      </div>
+
+      {/* Step 1: Bank & Period (always shown) */}
       <div style={{ background:'rgba(255,255,255,0.025)', border:'1px solid rgba(255,255,255,0.04)', borderRadius:12, padding:'13px 14px', marginBottom:10 }}>
         <div style={{ fontSize:10, fontWeight:700, color:'#A78BFA', textTransform:'uppercase', letterSpacing:'0.08em', marginBottom:8 }}>Step 1 — Bank & Period</div>
-        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginBottom:6 }}>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
           <div>
             <label style={{ fontSize:10, color:'#6B7A8D', marginBottom:4, display:'block' }}>Bank</label>
             <select value={bankId} onChange={e=>{setBankId(e.target.value); const b=ALL_BANKS.find(x=>x.id===e.target.value); if(b) setBankName(b.name)}} style={{ width:'100%', padding:'9px 11px', borderRadius:8, border:'1px solid rgba(255,255,255,0.08)', background:'#0F1A2E', color:'#E0E6ED', fontSize:12, fontFamily:"'Outfit',sans-serif", outline:'none' }}>
@@ -933,28 +1075,70 @@ function AIUpdaterTab({ adminKey }) {
         </div>
       </div>
 
-      {/* Step 2: Press release */}
-      <div style={{ background:'rgba(255,255,255,0.025)', border:'1px solid rgba(255,255,255,0.04)', borderRadius:12, padding:'13px 14px', marginBottom:10 }}>
-        <div style={{ fontSize:10, fontWeight:700, color:'#A78BFA', textTransform:'uppercase', letterSpacing:'0.08em', marginBottom:8 }}>Step 2 — Paste press release</div>
-        <textarea
-          value={pressRelease}
-          onChange={e=>setPressRelease(e.target.value)}
-          placeholder="Paste the bank's press release or earnings announcement text here. Include all financial figures: profit, assets, deposits, loans, NPL ratio, coverage, impairment charges..."
-          style={{ width:'100%', minHeight:200, padding:'10px 12px', borderRadius:8, border:'1px solid rgba(255,255,255,0.08)', background:'#0F1A2E', color:'#E0E6ED', fontSize:11.5, fontFamily:"'Outfit',sans-serif", lineHeight:1.5, resize:'vertical', outline:'none' }}
-        />
-        <div style={{ marginTop:6, fontSize:10, color:'#4A5568', display:'flex', justifyContent:'space-between' }}>
-          <span>{pressRelease.length.toLocaleString()} characters · {pressRelease.length > 50000 ? '⚠️ Too long' : '✓ OK'}</span>
-          <span>Cost per extraction: ~$0.005</span>
-        </div>
-      </div>
+      {/* MANUAL MODE */}
+      {mode === 'manual' && (
+        <>
+          {/* Step 2: Get prompt */}
+          <div style={{ background:'rgba(74,222,128,0.04)', border:'1px solid rgba(74,222,128,0.18)', borderRadius:12, padding:'13px 14px', marginBottom:10 }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8, flexWrap:'wrap', gap:6 }}>
+              <span style={{ fontSize:10, fontWeight:700, color:'#4ADE80', textTransform:'uppercase', letterSpacing:'0.08em' }}>Step 2 — Copy prompt for ChatGPT / Claude / Gemini</span>
+              <button onClick={copyPrompt} disabled={!bankId} style={{ padding:'6px 12px', borderRadius:7, border:'none', cursor:bankId?'pointer':'default', background:promptCopied?'#4ADE80':bankId?'rgba(74,222,128,0.15)':'#1A2438', color:promptCopied?'#0B1120':bankId?'#4ADE80':'#3A4558', fontFamily:"'Outfit',sans-serif", fontWeight:700, fontSize:10.5 }}>
+                {promptCopied ? '✓ Copied!' : '📋 Copy prompt'}
+              </button>
+            </div>
+            <ol style={{ fontSize:11, color:'#A0B0C8', lineHeight:1.7, paddingLeft:18, margin:0 }}>
+              <li>Pick a bank above, then click <b style={{ color:'#4ADE80' }}>Copy prompt</b></li>
+              <li>Open <a href="https://chat.openai.com" target="_blank" rel="noreferrer" style={{ color:'#60A5FA' }}>ChatGPT</a>, <a href="https://claude.ai" target="_blank" rel="noreferrer" style={{ color:'#60A5FA' }}>Claude</a>, or <a href="https://gemini.google.com" target="_blank" rel="noreferrer" style={{ color:'#60A5FA' }}>Gemini</a> in a new tab</li>
+              <li>Paste the prompt, then paste the press release text under it</li>
+              <li>Copy the JSON object from the AI's response</li>
+              <li>Paste it in the box below ↓</li>
+            </ol>
+          </div>
 
-      {/* Action buttons */}
-      <div style={{ display:'flex', gap:8, marginBottom:14 }}>
-        <button onClick={handleExtract} disabled={loading || !bankId || !pressRelease.trim()} style={{ flex:1, padding:'11px 0', borderRadius:9, border:'none', cursor:(loading||!bankId||!pressRelease.trim())?'default':'pointer', background:(loading||!bankId||!pressRelease.trim())?'#1A2438':'linear-gradient(135deg,#A78BFA,#8B5CF6)', color:(loading||!bankId||!pressRelease.trim())?'#3A4558':'#fff', fontFamily:"'Outfit',sans-serif", fontWeight:700, fontSize:12 }}>
-          {loading ? '⟳ Extracting with Claude...' : '🤖 Extract Data'}
-        </button>
-        {(result || error) && <button onClick={reset} style={{ padding:'11px 16px', borderRadius:9, border:'1px solid rgba(255,255,255,0.08)', cursor:'pointer', background:'rgba(255,255,255,0.04)', color:'#7A8699', fontFamily:"'Outfit',sans-serif", fontWeight:600, fontSize:11 }}>Reset</button>}
-      </div>
+          {/* Step 3: Paste JSON */}
+          <div style={{ background:'rgba(255,255,255,0.025)', border:'1px solid rgba(255,255,255,0.04)', borderRadius:12, padding:'13px 14px', marginBottom:10 }}>
+            <div style={{ fontSize:10, fontWeight:700, color:'#A78BFA', textTransform:'uppercase', letterSpacing:'0.08em', marginBottom:8 }}>Step 3 — Paste the JSON output here</div>
+            <textarea
+              value={jsonInput}
+              onChange={e=>setJsonInput(e.target.value)}
+              placeholder={isQuarterly ? `{\n  "q1Profit": 1.95,\n  "q1ProfitPrior": 1.85,\n  "q1Assets": 425,\n  "q1Deposits": 285,\n  "q1Loans": 358,\n  "q1Npl": 3.2,\n  "q1Coverage": 105,\n  "q1Impairment": 0.3,\n  "q1OpIncome": 4.2,\n  "q1Period": "Q1 2026 reported",\n  "q1Source": "Press release Apr 28, 2026"\n}` : `{\n  "profit2025": 24.0,\n  "profit2024": 23.0,\n  "totalAssets": 1164,\n  ...\n}`}
+              style={{ width:'100%', minHeight:160, padding:'10px 12px', borderRadius:8, border:'1px solid rgba(255,255,255,0.08)', background:'#0F1A2E', color:'#E0E6ED', fontSize:11, fontFamily:'monospace', lineHeight:1.5, resize:'vertical', outline:'none' }}
+            />
+            <div style={{ marginTop:6, fontSize:10, color:'#4A5568' }}>{jsonInput.length.toLocaleString()} characters · No API call · ✓ Free</div>
+          </div>
+
+          <div style={{ display:'flex', gap:8, marginBottom:14 }}>
+            <button onClick={handleManualJSON} disabled={!bankId || !jsonInput.trim()} style={{ flex:1, padding:'11px 0', borderRadius:9, border:'none', cursor:(!bankId||!jsonInput.trim())?'default':'pointer', background:(!bankId||!jsonInput.trim())?'#1A2438':'linear-gradient(135deg,#A78BFA,#8B5CF6)', color:(!bankId||!jsonInput.trim())?'#3A4558':'#fff', fontFamily:"'Outfit',sans-serif", fontWeight:700, fontSize:12 }}>📋 Generate Snippet</button>
+            {(result || error) && <button onClick={reset} style={{ padding:'11px 16px', borderRadius:9, border:'1px solid rgba(255,255,255,0.08)', cursor:'pointer', background:'rgba(255,255,255,0.04)', color:'#7A8699', fontFamily:"'Outfit',sans-serif", fontWeight:600, fontSize:11 }}>Reset</button>}
+          </div>
+        </>
+      )}
+
+      {/* AI MODE */}
+      {mode === 'ai' && (
+        <>
+          <div style={{ background:'rgba(255,255,255,0.025)', border:'1px solid rgba(255,255,255,0.04)', borderRadius:12, padding:'13px 14px', marginBottom:10 }}>
+            <div style={{ fontSize:10, fontWeight:700, color:'#A78BFA', textTransform:'uppercase', letterSpacing:'0.08em', marginBottom:8 }}>Step 2 — Paste press release</div>
+            <textarea
+              value={pressRelease}
+              onChange={e=>setPressRelease(e.target.value)}
+              placeholder="Paste the bank's press release or earnings announcement text here. Include all financial figures: profit, assets, deposits, loans, NPL ratio, coverage, impairment charges..."
+              style={{ width:'100%', minHeight:200, padding:'10px 12px', borderRadius:8, border:'1px solid rgba(255,255,255,0.08)', background:'#0F1A2E', color:'#E0E6ED', fontSize:11.5, fontFamily:"'Outfit',sans-serif", lineHeight:1.5, resize:'vertical', outline:'none' }}
+            />
+            <div style={{ marginTop:6, fontSize:10, color:'#4A5568', display:'flex', justifyContent:'space-between' }}>
+              <span>{pressRelease.length.toLocaleString()} characters · {pressRelease.length > 50000 ? '⚠️ Too long' : '✓ OK'}</span>
+              <span>Cost per extraction: ~$0.001</span>
+            </div>
+          </div>
+
+          <div style={{ display:'flex', gap:8, marginBottom:14 }}>
+            <button onClick={handleAIExtract} disabled={loading || !bankId || !pressRelease.trim()} style={{ flex:1, padding:'11px 0', borderRadius:9, border:'none', cursor:(loading||!bankId||!pressRelease.trim())?'default':'pointer', background:(loading||!bankId||!pressRelease.trim())?'#1A2438':'linear-gradient(135deg,#A78BFA,#8B5CF6)', color:(loading||!bankId||!pressRelease.trim())?'#3A4558':'#fff', fontFamily:"'Outfit',sans-serif", fontWeight:700, fontSize:12 }}>
+              {loading ? '⟳ Extracting with Claude...' : '🤖 Extract Data'}
+            </button>
+            {(result || error) && <button onClick={reset} style={{ padding:'11px 16px', borderRadius:9, border:'1px solid rgba(255,255,255,0.08)', cursor:'pointer', background:'rgba(255,255,255,0.04)', color:'#7A8699', fontFamily:"'Outfit',sans-serif", fontWeight:600, fontSize:11 }}>Reset</button>}
+          </div>
+        </>
+      )}
 
       {error && (
         <div style={{ padding:'10px 12px', background:'rgba(248,113,113,0.06)', borderRadius:8, border:'1px solid rgba(248,113,113,0.2)', marginBottom:12, fontSize:11.5, color:'#F87171' }}>
@@ -967,7 +1151,7 @@ function AIUpdaterTab({ adminKey }) {
           {/* Extracted data preview */}
           <div style={{ background:'rgba(74,222,128,0.04)', border:'1px solid rgba(74,222,128,0.2)', borderRadius:12, padding:'13px 14px', marginBottom:10 }}>
             <div style={{ fontSize:10, fontWeight:700, color:'#4ADE80', textTransform:'uppercase', letterSpacing:'0.08em', marginBottom:10, display:'flex', alignItems:'center', gap:6 }}>
-              ✓ Extracted — review carefully before applying
+              ✓ {result.source === 'manual' ? 'Parsed from JSON' : 'Extracted'} — review before applying
             </div>
             <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(140px,1fr))', gap:6 }}>
               {Object.entries(result.extracted).filter(([k,v]) => k !== '_notes' && v !== null && v !== undefined).map(([k,v]) => (
@@ -979,7 +1163,7 @@ function AIUpdaterTab({ adminKey }) {
             </div>
             {result.extracted._notes && (
               <div style={{ marginTop:10, padding:'7px 10px', background:'rgba(245,158,11,0.06)', borderRadius:7, border:'1px solid rgba(245,158,11,0.15)', fontSize:10.5, color:'#FBBF24' }}>
-                <b>Claude's notes:</b> {result.extracted._notes}
+                <b>Notes:</b> {result.extracted._notes}
               </div>
             )}
           </div>
@@ -987,7 +1171,7 @@ function AIUpdaterTab({ adminKey }) {
           {/* Snippet */}
           <div style={{ background:'rgba(255,255,255,0.025)', border:'1px solid rgba(255,255,255,0.05)', borderRadius:12, padding:'13px 14px', marginBottom:10 }}>
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
-              <span style={{ fontSize:10, fontWeight:700, color:'#F0C850', textTransform:'uppercase', letterSpacing:'0.08em' }}>Step 3 — Copy this snippet to banks.js</span>
+              <span style={{ fontSize:10, fontWeight:700, color:'#F0C850', textTransform:'uppercase', letterSpacing:'0.08em' }}>Step 4 — Copy snippet to banks.js</span>
               <button onClick={copySnippet} style={{ padding:'5px 12px', borderRadius:7, border:'none', cursor:'pointer', background:copied?'#4ADE80':'rgba(240,200,80,0.15)', color:copied?'#0B1120':'#F0C850', fontFamily:"'Outfit',sans-serif", fontWeight:700, fontSize:10.5 }}>
                 {copied ? '✓ Copied!' : '📋 Copy'}
               </button>
@@ -997,11 +1181,11 @@ function AIUpdaterTab({ adminKey }) {
 
           {/* Apply instructions */}
           <div style={{ background:'rgba(96,165,250,0.05)', border:'1px solid rgba(96,165,250,0.15)', borderRadius:12, padding:'13px 14px' }}>
-            <div style={{ fontSize:10, fontWeight:700, color:'#60A5FA', textTransform:'uppercase', letterSpacing:'0.08em', marginBottom:8 }}>Step 4 — Apply on GitHub</div>
+            <div style={{ fontSize:10, fontWeight:700, color:'#60A5FA', textTransform:'uppercase', letterSpacing:'0.08em', marginBottom:8 }}>Step 5 — Apply on GitHub</div>
             <ol style={{ fontSize:11.5, color:'#A0B0C8', lineHeight:1.8, paddingLeft:18, margin:0 }}>
               <li>Open <code style={{ background:'rgba(0,0,0,0.3)', padding:'1px 5px', borderRadius:3, fontSize:10.5 }}>data/banks.js</code> on GitHub → click ✏️ to edit</li>
               <li>Find <code style={{ background:'rgba(0,0,0,0.3)', padding:'1px 5px', borderRadius:3, fontSize:10.5 }}>id:&quot;{result.bankId}&quot;</code></li>
-              <li>{period.startsWith('q') ? 'Replace the existing q1Status:"pending"... fields' : 'Replace the existing FY fields'} with the snippet above</li>
+              <li>{isQuarterly ? 'Replace the existing q1Status:"pending"... fields' : 'Replace the existing FY fields'} with the snippet above</li>
               <li>Commit changes — Vercel auto-deploys in ~60 seconds</li>
             </ol>
           </div>
@@ -1010,12 +1194,15 @@ function AIUpdaterTab({ adminKey }) {
 
       <div style={{ marginTop:14, padding:12, background:'rgba(167,139,250,0.04)', borderRadius:9, borderLeft:'3px solid #A78BFA' }}>
         <p style={{ fontSize:10, color:'#A0B0C8', lineHeight:1.7 }}>
-          <b style={{ color:'#A78BFA' }}>How this works:</b> Press release goes to Claude (server-side, your API key). Claude reads the text and extracts only what is explicitly stated. Always review numbers before applying — AI extraction is ~95% accurate but occasional misreads happen on complex tables. Cost per extraction: ~$0.005 (less than 1 cent).
+          <b style={{ color:'#A78BFA' }}>Two ways to extract data:</b><br/>
+          <b style={{ color:'#4ADE80' }}>Manual (free):</b> Use ChatGPT/Claude/Gemini outside the app, paste back the JSON. No API cost.<br/>
+          <b style={{ color:'#A78BFA' }}>AI Extract:</b> Uses your Anthropic API key inside the app (~$0.001 per extraction). Faster but uses credit. Always review numbers before applying.
         </p>
       </div>
     </div>
   )
 }
+
 
 
 export default function BankingHub() {
