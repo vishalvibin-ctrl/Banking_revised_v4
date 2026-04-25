@@ -32,22 +32,16 @@ export async function GET(request) {
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 2000,
-        tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+        model: 'claude-haiku-4-5',
+        max_tokens: 1500,
+        tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 1 }],
         messages: [{
           role: 'user',
-          content: `Search for the latest UAE banking and finance news as of today (${today}). Focus on bank earnings (especially Q1 2026 results currently being reported), regulatory changes, M&A, sukuk issuances, digital banking developments, and major UAE banking sector news.
+          content: `Search once for "UAE banks ${today.slice(0,7)} earnings news" then return ONLY a JSON array of 8 latest UAE banking headlines.
 
-Return ONLY a JSON array of exactly 12 news items, sorted by date descending (newest first). Each item must have:
-- "title" (string, headline)
-- "source" (string, e.g. "The National", "Zawya", "Khaleej Times", "Gulf News")
-- "date" (string, display format like "Apr 24, 2026")
-- "dateSort" (ISO date string like "2026-04-24")
-- "summary" (1 concise sentence about the story)
-- "category" (one of: Banking, Markets, Regulation, Digital, Islamic Finance, Economy)
+Each item: {"title": "...", "source": "...", "date": "Apr 24, 2026", "dateSort": "2026-04-24", "summary": "one sentence", "category": "Banking|Markets|Regulation|Digital|Islamic Finance|Economy"}
 
-Output ONLY the JSON array. No markdown code fences, no preamble, no explanation. Start directly with [ and end with ].`
+Sort newest first. Output ONLY the JSON array, no markdown, no preamble. Start with [ and end with ].`
         }]
       })
     })
