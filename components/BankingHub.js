@@ -246,8 +246,8 @@ function FinancialsTab({ activeBankIds, onOpenDrawer, onOpenMethodology }) {
       {/* Sort chips */}
       <div style={{ display:'flex', gap:4, marginBottom:12, overflowX:'auto', alignItems:'center' }}>
         <span style={{ fontSize:10, color:'#4A5568', marginRight:4 }}>Sort:</span>
-        {[['profit','Profit'],['assets','Assets'],['deposits','Deposits'],['roe','ROE'],['npl','NPL %'],['coverage','Coverage']].map(([k,l]) => (
-          <button key={k} onClick={()=>setSortBy(k)} style={{ padding:'5px 10px', borderRadius:6, border:'none', cursor:'pointer', whiteSpace:'nowrap', background:sortBy===k?'#fff':'rgba(255,255,255,0.04)', color:sortBy===k?'#0B1120':'#6B7A8D', fontFamily:"'Outfit',sans-serif", fontWeight:600, fontSize:10.5 }}>{l}</button>
+        {[['profit','Profit','earnings'],['assets','Assets','balancesheet'],['deposits','Deposits','balancesheet'],['roe','ROE','earnings'],['npl','NPL %','risk'],['coverage','Coverage','risk']].map(([k,l,linkedView]) => (
+          <button key={k} onClick={()=>{setSortBy(k); setView(linkedView)}} style={{ padding:'5px 10px', borderRadius:6, border:'none', cursor:'pointer', whiteSpace:'nowrap', background:sortBy===k?'#fff':'rgba(255,255,255,0.04)', color:sortBy===k?'#0B1120':'#6B7A8D', fontFamily:"'Outfit',sans-serif", fontWeight:600, fontSize:10.5 }}>{l}</button>
         ))}
       </div>
 
@@ -878,8 +878,12 @@ function AIUpdaterTab({ adminKey }) {
   const isQuarterly = period.startsWith('q')
 
   // Build the prompt for ChatGPT/Claude/Gemini
-  const buildPrompt = () => {
+  const buildPrompt = (prText = '') => {
     const periodLabel = periodLabels[period] || period
+    const prSection = prText.trim()
+      ? `PRESS RELEASE TEXT:\n${prText.trim()}`
+      : `PRESS RELEASE TEXT:\n>>> PASTE THE PRESS RELEASE TEXT HERE <<<\n(Replace the line above with the actual press release text)`
+
     if (isQuarterly) {
       return `You are extracting banking financial data from a UAE bank press release.
 
@@ -887,7 +891,7 @@ BANK: ${selectedBank?.name || bankName || '[bank name]'}
 PERIOD: ${periodLabel}
 
 INSTRUCTIONS:
-1. Read the press release text I will paste below.
+1. Read the press release text below.
 2. Extract numerical data with these RULES:
    - All AED amounts converted to BILLIONS (AED B). Example: "AED 5,400 million" -> 5.4
    - Percentages: just the number (2.4 not "2.4%")
@@ -913,8 +917,7 @@ INSTRUCTIONS:
 
 CRITICAL: Output ONLY the JSON object. No markdown code fences, no preamble. Start with { end with }.
 
-PRESS RELEASE TEXT:
-[PASTE THE PRESS RELEASE HERE]`
+${prSection}`
     } else {
       return `You are extracting banking financial data from a UAE bank annual report or press release.
 
@@ -922,7 +925,7 @@ BANK: ${selectedBank?.name || bankName || '[bank name]'}
 PERIOD: ${periodLabel}
 
 INSTRUCTIONS:
-1. Read the press release / annual report text I will paste below.
+1. Read the press release / annual report text below.
 2. Extract numerical data with these RULES:
    - All AED amounts converted to BILLIONS (AED B). Example: "AED 5,400 million" -> 5.4
    - Percentages: just the number (2.4 not "2.4%")
@@ -954,8 +957,7 @@ INSTRUCTIONS:
 
 CRITICAL: Output ONLY the JSON object. No markdown code fences, no preamble. Start with { end with }.
 
-PRESS RELEASE TEXT:
-[PASTE THE PRESS RELEASE HERE]`
+${prSection}`
     }
   }
 
@@ -1017,7 +1019,9 @@ PRESS RELEASE TEXT:
 
   const copyPrompt = () => {
     if (!bankId) { setError('Pick a bank first to personalise the prompt'); return }
-    navigator.clipboard.writeText(buildPrompt())
+    setError(null)
+    // Pass the press release text so it gets embedded inline — no manual replacement needed
+    navigator.clipboard.writeText(buildPrompt(pressRelease))
     setPromptCopied(true)
     setTimeout(() => setPromptCopied(false), 2500)
   }
@@ -1078,33 +1082,53 @@ PRESS RELEASE TEXT:
       {/* MANUAL MODE */}
       {mode === 'manual' && (
         <>
-          {/* Step 2: Get prompt */}
+          {/* Step 2: Paste press release */}
+          <div style={{ background:'rgba(255,255,255,0.025)', border:'1px solid rgba(255,255,255,0.04)', borderRadius:12, padding:'13px 14px', marginBottom:10 }}>
+            <div style={{ fontSize:10, fontWeight:700, color:'#A78BFA', textTransform:'uppercase', letterSpacing:'0.08em', marginBottom:8 }}>Step 2 — Paste the press release text</div>
+            <textarea
+              value={pressRelease}
+              onChange={e=>setPressRelease(e.target.value)}
+              placeholder="Paste the bank's press release or earnings announcement text here. Include all financial figures: profit, assets, deposits, loans, NPL ratio, coverage, impairment charges...&#10;&#10;Tip: Just copy-paste the entire press release — the AI will pick out only what it needs."
+              style={{ width:'100%', minHeight:180, padding:'10px 12px', borderRadius:8, border:'1px solid rgba(255,255,255,0.08)', background:'#0F1A2E', color:'#E0E6ED', fontSize:11.5, fontFamily:"'Outfit',sans-serif", lineHeight:1.5, resize:'vertical', outline:'none' }}
+            />
+            <div style={{ marginTop:6, fontSize:10, color:'#4A5568', display:'flex', justifyContent:'space-between' }}>
+              <span>{pressRelease.length.toLocaleString()} characters {pressRelease.length === 0 ? '· Paste the press release above' : '· ✓ Looks good'}</span>
+              <span>No API call · ✓ Free</span>
+            </div>
+          </div>
+
+          {/* Step 3: Copy prompt */}
           <div style={{ background:'rgba(74,222,128,0.04)', border:'1px solid rgba(74,222,128,0.18)', borderRadius:12, padding:'13px 14px', marginBottom:10 }}>
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8, flexWrap:'wrap', gap:6 }}>
-              <span style={{ fontSize:10, fontWeight:700, color:'#4ADE80', textTransform:'uppercase', letterSpacing:'0.08em' }}>Step 2 — Copy prompt for ChatGPT / Claude / Gemini</span>
-              <button onClick={copyPrompt} disabled={!bankId} style={{ padding:'6px 12px', borderRadius:7, border:'none', cursor:bankId?'pointer':'default', background:promptCopied?'#4ADE80':bankId?'rgba(74,222,128,0.15)':'#1A2438', color:promptCopied?'#0B1120':bankId?'#4ADE80':'#3A4558', fontFamily:"'Outfit',sans-serif", fontWeight:700, fontSize:10.5 }}>
-                {promptCopied ? '✓ Copied!' : '📋 Copy prompt'}
+              <span style={{ fontSize:10, fontWeight:700, color:'#4ADE80', textTransform:'uppercase', letterSpacing:'0.08em' }}>Step 3 — Send to ChatGPT / Claude / Gemini</span>
+              <button onClick={copyPrompt} disabled={!bankId} style={{ padding:'8px 14px', borderRadius:7, border:'none', cursor:bankId?'pointer':'default', background:promptCopied?'#4ADE80':bankId?'rgba(74,222,128,0.2)':'#1A2438', color:promptCopied?'#0B1120':bankId?'#4ADE80':'#3A4558', fontFamily:"'Outfit',sans-serif", fontWeight:700, fontSize:11 }}>
+                {promptCopied ? '✓ Copied to clipboard!' : '📋 Copy complete prompt'}
               </button>
             </div>
-            <ol style={{ fontSize:11, color:'#A0B0C8', lineHeight:1.7, paddingLeft:18, margin:0 }}>
-              <li>Pick a bank above, then click <b style={{ color:'#4ADE80' }}>Copy prompt</b></li>
+            <div style={{ fontSize:11, color:'#A0B0C8', lineHeight:1.6, marginBottom:6 }}>
+              {pressRelease.trim()
+                ? <>The complete prompt <b style={{ color:'#4ADE80' }}>including your press release</b> will be copied. Just paste it into the AI — no editing needed.</>
+                : <span style={{ color:'#FBBF24' }}>⚠ Paste the press release in Step 2 first, otherwise the prompt will be empty.</span>}
+            </div>
+            <ol style={{ fontSize:10.5, color:'#7A8699', lineHeight:1.7, paddingLeft:18, margin:0 }}>
+              <li>Click <b style={{ color:'#4ADE80' }}>Copy complete prompt</b> above</li>
               <li>Open <a href="https://chat.openai.com" target="_blank" rel="noreferrer" style={{ color:'#60A5FA' }}>ChatGPT</a>, <a href="https://claude.ai" target="_blank" rel="noreferrer" style={{ color:'#60A5FA' }}>Claude</a>, or <a href="https://gemini.google.com" target="_blank" rel="noreferrer" style={{ color:'#60A5FA' }}>Gemini</a> in a new tab</li>
-              <li>Paste the prompt, then paste the press release text under it</li>
+              <li>Paste (Ctrl+V) and press Enter — that's it. The press release is already embedded.</li>
               <li>Copy the JSON object from the AI's response</li>
-              <li>Paste it in the box below ↓</li>
+              <li>Paste it in Step 4 below ↓</li>
             </ol>
           </div>
 
-          {/* Step 3: Paste JSON */}
+          {/* Step 4: Paste JSON */}
           <div style={{ background:'rgba(255,255,255,0.025)', border:'1px solid rgba(255,255,255,0.04)', borderRadius:12, padding:'13px 14px', marginBottom:10 }}>
-            <div style={{ fontSize:10, fontWeight:700, color:'#A78BFA', textTransform:'uppercase', letterSpacing:'0.08em', marginBottom:8 }}>Step 3 — Paste the JSON output here</div>
+            <div style={{ fontSize:10, fontWeight:700, color:'#A78BFA', textTransform:'uppercase', letterSpacing:'0.08em', marginBottom:8 }}>Step 4 — Paste the JSON output from the AI</div>
             <textarea
               value={jsonInput}
               onChange={e=>setJsonInput(e.target.value)}
               placeholder={isQuarterly ? `{\n  "q1Profit": 1.95,\n  "q1ProfitPrior": 1.85,\n  "q1Assets": 425,\n  "q1Deposits": 285,\n  "q1Loans": 358,\n  "q1Npl": 3.2,\n  "q1Coverage": 105,\n  "q1Impairment": 0.3,\n  "q1OpIncome": 4.2,\n  "q1Period": "Q1 2026 reported",\n  "q1Source": "Press release Apr 28, 2026"\n}` : `{\n  "profit2025": 24.0,\n  "profit2024": 23.0,\n  "totalAssets": 1164,\n  ...\n}`}
               style={{ width:'100%', minHeight:160, padding:'10px 12px', borderRadius:8, border:'1px solid rgba(255,255,255,0.08)', background:'#0F1A2E', color:'#E0E6ED', fontSize:11, fontFamily:'monospace', lineHeight:1.5, resize:'vertical', outline:'none' }}
             />
-            <div style={{ marginTop:6, fontSize:10, color:'#4A5568' }}>{jsonInput.length.toLocaleString()} characters · No API call · ✓ Free</div>
+            <div style={{ marginTop:6, fontSize:10, color:'#4A5568' }}>{jsonInput.length.toLocaleString()} characters {jsonInput.trim().startsWith('{') ? '· ✓ Looks like JSON' : jsonInput.length > 0 ? '· ⚠ Should start with {' : ''}</div>
           </div>
 
           <div style={{ display:'flex', gap:8, marginBottom:14 }}>
@@ -1171,7 +1195,7 @@ PRESS RELEASE TEXT:
           {/* Snippet */}
           <div style={{ background:'rgba(255,255,255,0.025)', border:'1px solid rgba(255,255,255,0.05)', borderRadius:12, padding:'13px 14px', marginBottom:10 }}>
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
-              <span style={{ fontSize:10, fontWeight:700, color:'#F0C850', textTransform:'uppercase', letterSpacing:'0.08em' }}>Step 4 — Copy snippet to banks.js</span>
+              <span style={{ fontSize:10, fontWeight:700, color:'#F0C850', textTransform:'uppercase', letterSpacing:'0.08em' }}>{mode==='manual' ? 'Step 5 — Copy snippet to banks.js' : 'Step 3 — Copy snippet to banks.js'}</span>
               <button onClick={copySnippet} style={{ padding:'5px 12px', borderRadius:7, border:'none', cursor:'pointer', background:copied?'#4ADE80':'rgba(240,200,80,0.15)', color:copied?'#0B1120':'#F0C850', fontFamily:"'Outfit',sans-serif", fontWeight:700, fontSize:10.5 }}>
                 {copied ? '✓ Copied!' : '📋 Copy'}
               </button>
@@ -1181,7 +1205,7 @@ PRESS RELEASE TEXT:
 
           {/* Apply instructions */}
           <div style={{ background:'rgba(96,165,250,0.05)', border:'1px solid rgba(96,165,250,0.15)', borderRadius:12, padding:'13px 14px' }}>
-            <div style={{ fontSize:10, fontWeight:700, color:'#60A5FA', textTransform:'uppercase', letterSpacing:'0.08em', marginBottom:8 }}>Step 5 — Apply on GitHub</div>
+            <div style={{ fontSize:10, fontWeight:700, color:'#60A5FA', textTransform:'uppercase', letterSpacing:'0.08em', marginBottom:8 }}>{mode==='manual' ? 'Step 6 — Apply on GitHub' : 'Step 4 — Apply on GitHub'}</div>
             <ol style={{ fontSize:11.5, color:'#A0B0C8', lineHeight:1.8, paddingLeft:18, margin:0 }}>
               <li>Open <code style={{ background:'rgba(0,0,0,0.3)', padding:'1px 5px', borderRadius:3, fontSize:10.5 }}>data/banks.js</code> on GitHub → click ✏️ to edit</li>
               <li>Find <code style={{ background:'rgba(0,0,0,0.3)', padding:'1px 5px', borderRadius:3, fontSize:10.5 }}>id:&quot;{result.bankId}&quot;</code></li>
